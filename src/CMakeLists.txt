@@ -72,6 +72,7 @@ add_library(util
 )
 
 target_compile_definitions(util PUBLIC HAVE_CONFIG_H)
+target_compile_definitions(util PUBLIC FFFFFFFFUUUUUUUKKKKKK)
 target_include_directories(util
 	PUBLIC
 		.

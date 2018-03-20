@@ -40,6 +40,10 @@
 #include "versionbits.h"
 #include "warnings.h"
 
+#ifdef ENABLE_PROMETHEUS
+#include "prometheus_monitor.h"
+#endif
+
 #include <atomic>
 #include <sstream>
 
@@ -57,6 +61,7 @@
 /**
  * Global state
  */
+
 CCriticalSection cs_main;
 
 BlockMap mapBlockIndex;
@@ -761,6 +766,7 @@ static bool AcceptToMemoryPoolWorker(
     if (fRequireStandard && !IsStandardTx(tx, reason, hasMonolith)) {
         return state.DoS(0, false, REJECT_NONSTANDARD, reason);
     }
+
 
     // Only accept nLockTime-using transactions that can be mined in the next
     // block; we don't want our mempool filled up with transactions that can't
@@ -2299,6 +2305,12 @@ static bool ConnectBlock(const Config &config, const CBlock &block,
         mempool.clear();
     }
 
+#ifdef ENABLE_PROMETHEUS
+    if(g_PrometheusBenchmarkMonitor)
+    	g_PrometheusBenchmarkMonitor->ObserveConnectBlock(nTime1 - nTimeStart, nTime2 - nTime1, 
+														nTime3 - nTime2, nTime4 - nTime3, 
+														nTime5 - nTime4, nTime6 - nTime5, 0.001);
+#endif
     return true;
 }
 
@@ -2589,9 +2601,14 @@ static bool DisconnectTip(const Config &config, CValidationState &state,
         assert(flushed);
     }
 
-    LogPrint(BCLog::BENCH, "- Disconnect block: %.2fms\n",
-             (GetTimeMicros() - nStart) * 0.001);
+	auto nTime1 = GetTimeMicros();
 
+    LogPrint(BCLog::BENCH, "- Disconnect block: %.2fms\n",
+             (nTime1 - nStart) * 0.001);
+#ifdef ENABLE_PROMETHEUS
+    if(g_PrometheusBenchmarkMonitor)
+    	g_PrometheusBenchmarkMonitor->ObserveDisconnectTip(nTime1 - nStart, 0.001);
+#endif
     // Write the chain state to disk, if necessary.
     if (!FlushStateToDisk(config.GetChainParams(), state,
                           FLUSH_STATE_IF_NEEDED)) {
@@ -2758,14 +2775,19 @@ static bool ConnectTip(const Config &config, CValidationState &state,
         CCoinsViewCache view(pcoinsTip);
         bool rv = ConnectBlock(config, blockConnecting, state, pindexNew, view);
         GetMainSignals().BlockChecked(blockConnecting, state);
-        if (!rv) {
+		nTime3 = GetTimeMicros();
+		if (!rv) {
             if (state.IsInvalid()) {
                 InvalidBlockFound(pindexNew, state);
             }
+
+#ifdef ENABLE_PROMETHEUS
+            if(g_PrometheusBenchmarkMonitor)
+    			g_PrometheusBenchmarkMonitor->ObserveConnectTipFailed(nTime2 - nTime1, nTime3 - nTime2, 0.001);
+#endif
             return error("ConnectTip(): ConnectBlock %s failed",
                          pindexNew->GetBlockHash().ToString());
         }
-        nTime3 = GetTimeMicros();
         nTimeConnectTotal += nTime3 - nTime2;
         LogPrint(BCLog::BENCH, "  - Connect total: %.2fms [%.2fs]\n",
                  (nTime3 - nTime2) * 0.001, nTimeConnectTotal * 0.000001);
@@ -2798,6 +2820,11 @@ static bool ConnectTip(const Config &config, CValidationState &state,
              (nTime6 - nTime5) * 0.001, nTimePostConnect * 0.000001);
     LogPrint(BCLog::BENCH, "- Connect block: %.2fms [%.2fs]\n",
              (nTime6 - nTime1) * 0.001, nTimeTotal * 0.000001);
+
+#ifdef ENABLE_PROMETHEUS
+    if(g_PrometheusBenchmarkMonitor)
+    	g_PrometheusBenchmarkMonitor->ObserveConnectTipSuccess(nTime2 - nTime1, nTime3 - nTime2, nTime4 - nTime3, nTime5 - nTime4, nTime6 - nTime5, 0.001);
+#endif
 
     connectTrace.BlockConnected(pindexNew, std::move(pthisBlock));
     return true;

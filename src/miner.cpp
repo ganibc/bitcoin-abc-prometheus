@@ -33,6 +33,10 @@
 #include <boost/thread.hpp>
 #include <boost/tuple/tuple.hpp>
 
+#ifdef ENABLE_PROMETHEUS
+#include "prometheus_monitor.h"
+#endif
+
 static const int MAX_COINBASE_SCRIPTSIG_SIZE = 100;
 
 //////////////////////////////////////////////////////////////////////////////
@@ -229,6 +233,10 @@ BlockAssembler::CreateNewBlock(const CScript &scriptPubKeyIn) {
                       "updated descendants), validity: %.2fms (total %.2fms)\n",
         0.001 * (nTime1 - nTimeStart), nPackagesSelected, nDescendantsUpdated,
         0.001 * (nTime2 - nTime1), 0.001 * (nTime2 - nTimeStart));
+
+#ifdef ENABLE_PROMETHEUS
+	g_PrometheusBenchmarkMonitor->ObserveCreateNewBlock(nTime1 - nTimeStart, nTime2 - nTime1, 0.001);
+#endif
 
     return std::move(pblocktemplate);
 }

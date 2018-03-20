@@ -234,6 +234,7 @@ AC_ARG_ENABLE([werror],
 AC_LANG_PUSH([C++])
 AX_CHECK_COMPILE_FLAG([-Werror],[CXXFLAG_WERROR="-Werror"],[CXXFLAG_WERROR=""])
 
+
 if test "x$enable_asan" = xyes; then
 	enable_debug=yes
   asan_failed=no
@@ -372,6 +373,12 @@ AC_ARG_WITH([seeder],
   [build seeder (default=yes)])],
   [build_bitcoin_seeder=$withval],
   [build_bitcoin_seeder=yes])
+
+AC_ARG_WITH([prometheus],
+  [AS_HELP_STRING([--with-prometheus],
+  [build prometheus (default=no)])],
+  [use_prometheus=$withval],
+  [use_prometheus=no])
 
 use_pkgconfig=yes
 case $host in
@@ -1082,6 +1089,10 @@ AC_MSG_CHECKING([whether to build bitcoin-seeder])
 AM_CONDITIONAL([BUILD_BITCOIN_SEEDER], [test x$build_bitcoin_seeder = xyes])
 AC_MSG_RESULT($build_bitcoin_seeder)
 
+AC_MSG_CHECKING([whether to build with prometheus])
+AM_CONDITIONAL([ENABLE_PROMETHEUS], [test x$use_prometheus = xyes])
+AC_MSG_RESULT($use_prometheus)
+
 AC_MSG_CHECKING([whether to build utils (bitcoin-cli bitcoin-tx)])
 AM_CONDITIONAL([BUILD_BITCOIN_UTILS], [test x$build_bitcoin_utils = xyes])
 AC_MSG_RESULT($build_bitcoin_utils)
@@ -1095,6 +1106,12 @@ fi
 AC_MSG_RESULT($build_bitcoin_libs)
 
 AC_LANG_POP
+
+if test "x$use_prometheus" == "xyes"; then
+  CPPFLAGS="$CPPFLAGS -DENABLE_PROMETHEUS"
+  LDFLAGS="$LDFLAGS -L/usr/local/lib"
+  LIBS="$LIBS -lprometheus-cpp -lprotobuf"  
+fi
 
 if test "x$use_ccache" != "xno"; then
   AC_MSG_CHECKING(if ccache should be used)
@@ -1347,6 +1364,7 @@ echo "  with bench    = $use_bench"
 echo "  with upnp     = $use_upnp"
 echo "  use asm       = $use_asm"
 echo "  debug enabled = $enable_debug"
+echo "  with prometheus   = $use_prometheus"
 echo "  werror        = $enable_werror"
 echo
 echo "  sanitizers    "
@@ -1363,4 +1381,5 @@ echo "  CPPFLAGS      = $CPPFLAGS"
 echo "  CXX           = $CXX"
 echo "  CXXFLAGS      = $CXXFLAGS"
 echo "  LDFLAGS       = $LDFLAGS"
+echo "  LIBS          = $LIBS"
 echo

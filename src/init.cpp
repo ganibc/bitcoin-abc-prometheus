@@ -46,6 +46,9 @@
 #include "wallet/wallet.h"
 #endif
 #include "warnings.h"
+#ifdef ENABLE_PROMETHEUS
+#include "prometheus_monitor.h"
+#endif
 
 #include <cstdint>
 #include <cstdio>
@@ -188,6 +191,10 @@ void Shutdown() {
     /// does this if the respective module was initialized.
     RenameThread("bitcoin-shutoff");
     mempool.AddTransactionsUpdated(1);
+
+#ifdef ENABLE_PROMETHEUS
+	StopPrometheus();
+#endif
 
     StopHTTPRPC();
     StopREST();
@@ -1730,6 +1737,10 @@ bool AppInitMain(Config &config, boost::thread_group &threadGroup,
         // Detailed error printed inside LockDataDirectory
         return false;
     }
+
+#ifdef ENABLE_PROMETHEUS
+    StartPrometheus();
+#endif
 
 #ifndef WIN32
     CreatePidFile(GetPidFile(), getpid());
