@@ -1740,6 +1740,7 @@ bool AppInitMain(Config &config, boost::thread_group &threadGroup,
 
 #ifdef ENABLE_PROMETHEUS
     StartPrometheus();
+    LogPrintf("Prometheus process started.\n");
 #endif
 
 #ifndef WIN32

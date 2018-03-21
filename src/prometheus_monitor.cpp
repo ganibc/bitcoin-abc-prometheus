@@ -19,7 +19,7 @@ PrometheusClient* g_PrometheusClient = nullptr;
 PrometheusBenchmarkMonitor* g_PrometheusBenchmarkMonitor = nullptr;
 
 PrometheusClient::PrometheusClient()
-	: m_Exposer("127.0.0.1:8011")
+	: m_Exposer("0.0.0.0:8011")
 {
 	m_Registry = make_shared<Registry>();
 	m_Exposer.RegisterCollectable(m_Registry);
