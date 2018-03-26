@@ -10,4 +10,4 @@ SROOT=$(cd $(dirname "$0"); pwd)
 cd $SROOT
 
 OPT_ZMQ="-zmqpubrawblock=tcp://0.0.0.0:8331 -zmqpubrawtx=tcp://0.0.0.0:8331 -zmqpubhashtx=tcp://0.0.0.0:8331 -zmqpubhashblock=tcp://0.0.0.0:8331"
-bitcoind -conf="/root/.bitcoin/bitcoin.conf" -datadir="/root/.bitcoin" -regtest -printtoconsole $OPT_ZMQ
+bitcoind -conf="/root/.bitcoin/bitcoin.conf" -datadir="/root/.bitcoin" $OPT_ZMQ
