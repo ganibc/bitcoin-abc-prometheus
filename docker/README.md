@@ -64,7 +64,6 @@ blockmaxsize=8000000
 ```
 # start docker
 docker run -it -v ~/work/bitcoin-abc:/root/.bitcoin --name bitcoin-abc -p 8333:8333 -p 8332:8332 -p 8331:8331 -p 8011:8011 --restart always -d bitcoin-abc:prometheus
-#docker run -it -v ~/work/bitcoin-abc:/root/.bitcoin --name bitcoin-abc -p 8333:8333 -p 8332:8332 -p 8331:8331 -p 18333:18333 -p 18332:18332 -p 18331:18331 --restart always -d bitcoin-abc:0.16.1
 
 # login
 docker exec -it bitcoin-abc /bin/bash

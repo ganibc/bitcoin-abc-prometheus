@@ -1,13 +1,13 @@
 #
 # Dockerfile
 #
-# @author zhibiao.pan@bitmain.com, yihao.peng@bitmain.com
+# @author gani.budicahyonog@bitmain.com copied from btcpool repositories
 # @copyright btc.com
-# @since 2016-08-01
+# @since 2018-03-26
 #
 #
 FROM phusion/baseimage:0.9.22
-MAINTAINER YihaoPeng <yihao.peng@bitmain.com>
+MAINTAINER Gani Budi Cahyono <gani.budicahyonog@bitmain.com>
 
 ENV HOME /root
 ENV TERM xterm
