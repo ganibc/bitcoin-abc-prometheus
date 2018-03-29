@@ -16,9 +16,11 @@ CMD ["/sbin/my_init"]
 # use aliyun source
 #ADD sources-aliyun.com.list /etc/apt/sources.list
 
+RUN add-apt-repository ppa:bitcoin/bitcoin
 RUN apt-get update
 RUN apt-get install -y build-essential libtool autotools-dev automake pkg-config libssl-dev libevent-dev bsdmainutils yasm
 RUN apt-get install -y libboost-all-dev libzmq3-dev curl wget
+RUN apt-get install -y libdb4.8-dev libdb4.8++-dev
 RUN apt-get install -y git
 RUN apt-get install -y cmake
 
@@ -52,7 +54,7 @@ RUN cd ~/source && git clone https://github.com/ganibc/bitcoin-abc-prometheus.gi
 RUN cd ~/source \
   && cd bitcoin-abc-prometheus \
   && ./autogen.sh \
-  && ./configure --disable-wallet --disable-tests --with-prometheus \
+  && ./configure --disable-tests --with-prometheus \
   && make && make install
   #&& make -j$(nproc) && make install
 
