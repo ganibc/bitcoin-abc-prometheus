@@ -1,6 +1,7 @@
 
 #include "prometheus_monitor.h"
 #include <prometheus/histogram_builder.h>
+#include "util.h"
 
 using namespace std;
 
@@ -19,7 +20,7 @@ PrometheusClient* g_PrometheusClient = nullptr;
 PrometheusBenchmarkMonitor* g_PrometheusBenchmarkMonitor = nullptr;
 
 PrometheusClient::PrometheusClient()
-	: m_Exposer("0.0.0.0:8011")
+	: m_Exposer(string("0.0.0.0:") + gArgs.GetArg("-prometheusport", "8011"))
 {
 	m_Registry = make_shared<Registry>();
 	m_Exposer.RegisterCollectable(m_Registry);
