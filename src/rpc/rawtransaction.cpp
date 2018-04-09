@@ -1173,6 +1173,298 @@ static UniValue sendrawtransaction(const Config &config,
     return txid.GetHex();
 }
 
+
+#if 1//#ifdef ENABLE_WALLET
+
+//  currently placeholder to generate big sig ops scripts. currently it's regular script same as createrawtransaction
+class CBigSigOpsScriptVisitor : public boost::static_visitor<bool> {
+private:
+    CScript *script;
+
+public:
+    CBigSigOpsScriptVisitor(CScript *scriptin) { script = scriptin; }
+
+    bool operator()(const CNoDestination &dest) const {
+        script->clear();
+        return false;
+    }
+
+    bool operator()(const CKeyID &keyID) const {
+        script->clear();
+        *script << OP_DUP << OP_HASH160 << ToByteVector(keyID) << OP_EQUALVERIFY
+                << OP_CHECKSIG;
+        return true;
+    }
+
+    bool operator()(const CScriptID &scriptID) const {
+        script->clear();
+        *script << OP_HASH160 << ToByteVector(scriptID) << OP_EQUAL;
+        return true;
+    }
+};
+
+
+CScript GetBigSigOpsScriptForDestination(const CTxDestination &dest) {
+    CScript script;
+
+    boost::apply_visitor(CBigSigOpsScriptVisitor(&script), dest);
+    return script;
+}
+
+
+static UniValue fillmempool(const Config &config,
+                                         const JSONRPCRequest &request) {
+    CWallet *const pwallet = GetWalletForJSONRPCRequest(request);
+    if (!EnsureWalletIsAvailable(pwallet, request.fHelp)) {
+        return NullUniValue;
+    }
+
+    if (request.fHelp || request.params.size() != 0) {
+        throw std::runtime_error(
+            "resendwallettransactions\n"
+            "Immediately re-broadcast unconfirmed wallet transactions to all "
+            "peers.\n"
+            "Intended only for testing; the wallet code periodically "
+            "re-broadcasts\n"
+            "automatically.\n"
+            "Returns an RPC error if -walletbroadcast is set to false.\n"
+            "Returns array of transaction ids that were re-broadcast.\n");
+    }
+    // Parse the account first so we don't generate a key if there's an error
+    std::string strAccount;
+    if (!pwallet->IsLocked()) {
+        pwallet->TopUpKeyPool();
+    }
+    LOCK2(cs_main, pwallet->cs_wallet);
+    //  =========== get list unspent ====================//
+    
+
+    struct Unspent
+    {
+        std::string txid;
+        uint32_t vout;
+        int64_t satoshis;
+    };
+
+    std::vector<Unspent> unspentList;
+    {
+        bool include_unsafe = true;
+        std::vector<COutput> vecOutputs;
+        assert(pwallet != nullptr);
+        pwallet->AvailableCoins(vecOutputs, !include_unsafe, nullptr, true);
+        for (const COutput &out : vecOutputs) 
+        {
+            CTxDestination address;
+            const CScript &scriptPubKey = out.tx->tx->vout[out.i].scriptPubKey;
+            bool fValidAddress = ExtractDestination(scriptPubKey, address);
+
+            if(!fValidAddress)
+                continue;
+
+            const Amount& amount = out.tx->tx->vout[out.i].nValue;
+            unspentList.push_back(Unspent{out.tx->GetId().GetHex(), static_cast<uint32_t>(out.i), amount.GetSatoshis()});
+        }
+    }
+    //  =========== get new address =====================//
+
+    // Generate a new key that is added to wallet
+    const int OUTPUT_PER_INPUT = 100;
+    std::vector<std::string> addresses;
+    {
+        int totalOut = OUTPUT_PER_INPUT;//unspentList.size() * OUTPUT_PER_INPUT; //  send to 10 address per input
+        int lastPercent = -1;
+        for(int i = 0; i < totalOut; ++i)
+        {
+            CPubKey newKey;
+            if (!pwallet->GetKeyFromPool(newKey)) {
+                throw JSONRPCError(
+                    RPC_WALLET_KEYPOOL_RAN_OUT,
+                    "Error: Keypool ran out, please call keypoolrefill first");
+            }
+            CKeyID keyID = newKey.GetID();
+
+            pwallet->SetAddressBook(keyID, strAccount, "receive");
+            addresses.push_back(EncodeDestination(keyID));
+            int percent = i * 100 / totalOut;
+            if(percent > lastPercent)
+            {
+                lastPercent = percent;
+                LogPrintf( "get new address progress %d%% (%d/%d)\n", percent, i, totalOut );
+            }
+        }
+        LogPrintf("Found %d unspent transactions and creating %d output address", unspentList.size(), totalOut);
+    }
+
+    LogPrintf( "Create raw transaction step" );
+    //  ==================== createrawtransaction ===========================//
+    std::vector<CMutableTransaction> rawHxTxs;
+    {
+        // int startingOutAddress = 0;
+        rawHxTxs.reserve(unspentList.size());
+        uint32_t counter = 0;
+        int lastPercent = -1;
+        for(auto& unspent : unspentList)
+        {
+            CMutableTransaction rawTx;
+            uint256 txid;
+            txid.SetHex(unspent.txid);
+            CTxIn in(COutPoint(txid, unspent.vout), CScript(), std::numeric_limits<uint32_t>::max());
+            rawTx.vin.push_back(in);
+
+            Amount feePerK = minRelayTxFee.GetFeePerK();
+            // LogPrintf( "Fee per Kb %ld\n", feePerK.GetSatoshis() );
+            
+            const int assumedTxPerKb = 20;
+            int64_t relayFee = OUTPUT_PER_INPUT * feePerK.GetSatoshis() / assumedTxPerKb;
+            // LogPrintf( "Relay Fee %ld\n", relayFee );
+            int64_t satoshisPerDest = (unspent.satoshis / OUTPUT_PER_INPUT) - relayFee;
+            Amount nAmount(satoshisPerDest);
+
+            std::set<CTxDestination> destinations;
+            // int endOutput = startingOutAddress + OUTPUT_PER_INPUT;
+            for(int i = 0; i < OUTPUT_PER_INPUT; ++i)
+            {
+                const auto& name_ = addresses[i];
+                CTxDestination destination = DecodeDestination(name_, config.GetChainParams());
+                if (!IsValidDestination(destination)) {
+                    throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY,
+                                        std::string("Invalid Bitcoin address: ") + name_);
+                }
+
+                if (!destinations.insert(destination).second) {
+                    throw JSONRPCError( RPC_INVALID_PARAMETER, 
+                        std::string("Invalid parameter, duplicated address: ") + name_);
+                }
+
+                CScript scriptPubKey = GetBigSigOpsScriptForDestination(destination);
+
+                CTxOut out(nAmount, scriptPubKey);
+                rawTx.vout.push_back(out);
+            }
+
+            rawHxTxs.push_back(rawTx);
+
+            // startingOutAddress = endOutput;
+            ++counter;
+            int percent = counter * 100 / unspentList.size();
+            if(percent > lastPercent)
+            {
+                lastPercent = percent;
+                LogPrintf( "Create raw transaction progress %d%% (%d/%d)\n", percent, counter, unspentList.size() );
+            }
+        }
+    }
+    LogPrintf( "Create raw transaction done\n");
+
+
+    //  ======================= Sign transactions =================================//
+    LogPrintf( "Signing transactions\n");
+
+    const CKeyStore& keystore = *pwallet;
+    SigHashType sigHashType = SigHashType().withForkId();
+    for(CMutableTransaction& tx : rawHxTxs)
+    {
+        CCoinsView viewDummy;
+        CCoinsViewCache view(&viewDummy);
+        {
+            LOCK(mempool.cs);
+            CCoinsViewCache &viewChain = *pcoinsTip;
+            CCoinsViewMemPool viewMempool(&viewChain, mempool);
+            // Temporarily switch cache backend to db+mempool view.
+            view.SetBackend(viewMempool);
+
+            for (const CTxIn &txin : tx.vin) {
+                // Load entries from viewChain into view; can fail.
+                view.AccessCoin(txin.prevout);
+            }
+
+            // Switch back to avoid locking mempool for too long.
+            view.SetBackend(viewDummy);
+        }
+
+        const CTransaction txConst(tx);
+
+        UniValue vErrors(UniValue::VARR);
+        for (size_t i = 0; i < tx.vin.size(); i++) 
+        {
+            CTxIn &txin = tx.vin[i];
+            const Coin &coin = view.AccessCoin(txin.prevout);
+            if (coin.IsSpent()) {
+                TxInErrorToJSON(txin, vErrors, "Input not found or already spent");
+                continue;
+            }
+
+            const CScript &prevPubKey = coin.GetTxOut().scriptPubKey;
+            const Amount amount = coin.GetTxOut().nValue;
+
+            SignatureData sigdata;
+            // Only sign SIGHASH_SINGLE if there's a corresponding output:
+            if ((sigHashType.getBaseType() != BaseSigHashType::SINGLE) ||
+                (i < tx.vout.size())) {
+                ProduceSignature(MutableTransactionSignatureCreator(
+                                        &keystore, &tx, i, amount, sigHashType),
+                                    prevPubKey, sigdata);
+            }
+
+            UpdateTransaction(tx, i, sigdata);
+
+            ScriptError serror = SCRIPT_ERR_OK;
+            if (!VerifyScript(
+                    txin.scriptSig, prevPubKey, STANDARD_SCRIPT_VERIFY_FLAGS,
+                    TransactionSignatureChecker(&txConst, i, amount), &serror)) {
+                TxInErrorToJSON(txin, vErrors, ScriptErrorString(serror));
+            }
+        }
+    }
+    LogPrintf( "Signing transactions done\n");
+
+    UniValue result(UniValue::VARR);
+    Amount nMaxRawTxFee = maxTxFee;
+    //  ================================ send transaction ==================================//
+    LogPrintf( "submitting transactions\n");
+    for(CMutableTransaction& mtx : rawHxTxs)
+    {
+        CTransactionRef tx(MakeTransactionRef(std::move(mtx)));
+        const uint256 &txid = tx->GetId();
+
+        CValidationState state;
+        bool fLimitFree = false;
+        bool fMissingInputs = false;
+        if (!AcceptToMemoryPool(config, mempool, state, std::move(tx),
+                                fLimitFree, &fMissingInputs, false,
+                                nMaxRawTxFee)) {
+            if (state.IsInvalid()) {
+                throw JSONRPCError(RPC_TRANSACTION_REJECTED,
+                                   strprintf("%i: %s", state.GetRejectCode(),
+                                             state.GetRejectReason()));
+            } else {
+                if (fMissingInputs) {
+                    throw JSONRPCError(RPC_TRANSACTION_ERROR, "Missing inputs");
+                }
+
+                throw JSONRPCError(RPC_TRANSACTION_ERROR,
+                                   state.GetRejectReason());
+            }
+        }
+        if (!g_connman) {
+            throw JSONRPCError(
+                RPC_CLIENT_P2P_DISABLED,
+                "Error: Peer-to-peer functionality missing or disabled");
+        }
+
+        result.push_back(txid.GetHex());
+        CInv inv(MSG_TX, txid);
+        g_connman->ForEachNode([&inv](CNode *pnode) { pnode->PushInventory(inv); });
+
+    }
+    LogPrintf( "submitting transactions done\n");
+
+    return result;
+}
+
+#endif //   ENABLE_WALLET
+
+
 // clang-format off
 static const CRPCCommand commands[] = {
     //  category            name                      actor (function)        okSafeMode
@@ -1183,6 +1475,7 @@ static const CRPCCommand commands[] = {
     { "rawtransactions",    "decodescript",           decodescript,           true,  {"hexstring"} },
     { "rawtransactions",    "sendrawtransaction",     sendrawtransaction,     false, {"hexstring","allowhighfees"} },
     { "rawtransactions",    "signrawtransaction",     signrawtransaction,     false, {"hexstring","prevtxs","privkeys","sighashtype"} }, /* uses wallet if enabled */
+    { "rawtransactions",    "fillmempool",            fillmempool,            false, {} }, 
 
     { "blockchain",         "gettxoutproof",          gettxoutproof,          true,  {"txids", "blockhash"} },
     { "blockchain",         "verifytxoutproof",       verifytxoutproof,       true,  {"proof"} },
