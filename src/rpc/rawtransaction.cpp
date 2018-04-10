@@ -1292,32 +1292,51 @@ static UniValue fillmempool(const Config &config,
                 LogPrintf( "get new address progress %d%% (%d/%d)\n", percent, i, totalOut );
             }
         }
-        LogPrintf("Found %d unspent transactions and creating %d output address", unspentList.size(), totalOut);
+        LogPrintf("Found %d unspent transactions and creating %d output address\n", unspentList.size(), totalOut);
     }
 
-    LogPrintf( "Create raw transaction step" );
+    LogPrintf( "Create raw transaction step\n" );
     //  ==================== createrawtransaction ===========================//
     std::vector<CMutableTransaction> rawHxTxs;
     {
         // int startingOutAddress = 0;
         rawHxTxs.reserve(unspentList.size());
-        uint32_t counter = 0;
         int lastPercent = -1;
-        for(auto& unspent : unspentList)
-        {
-            CMutableTransaction rawTx;
-            uint256 txid;
-            txid.SetHex(unspent.txid);
-            CTxIn in(COutPoint(txid, unspent.vout), CScript(), std::numeric_limits<uint32_t>::max());
-            rawTx.vin.push_back(in);
 
-            Amount feePerK = minRelayTxFee.GetFeePerK();
-            // LogPrintf( "Fee per Kb %ld\n", feePerK.GetSatoshis() );
-            
-            const int assumedTxPerKb = 20;
-            int64_t relayFee = OUTPUT_PER_INPUT * feePerK.GetSatoshis() / assumedTxPerKb;
-            // LogPrintf( "Relay Fee %ld\n", relayFee );
-            int64_t satoshisPerDest = (unspent.satoshis / OUTPUT_PER_INPUT) - relayFee;
+        unsigned int startingUnspentIdx = 0;
+        Amount feePerK = minRelayTxFee.GetFeePerK();
+        const int assumedTxoutPerKb = 20;
+        int64_t relayFeePerTxout = OUTPUT_PER_INPUT * feePerK.GetSatoshis() / assumedTxoutPerKb;
+
+        while(startingUnspentIdx < unspentList.size())
+        {
+            int64_t satoshisPerDest = -1;
+            int64_t totalUnspent = 0;
+            int unspentCount = 0;
+            while(satoshisPerDest < 1000 && startingUnspentIdx + unspentCount < unspentList.size())
+            {
+                int currIdx = startingUnspentIdx + unspentCount;
+                auto& unspent = unspentList[currIdx];
+                totalUnspent += unspent.satoshis;
+                satoshisPerDest = (totalUnspent / OUTPUT_PER_INPUT) - relayFeePerTxout;
+                ++unspentCount;
+            }
+
+            if(satoshisPerDest < 1000)
+                break;
+            // LogPrintf( "Create raw transaction - satoshisPerDest: %ld\n", satoshisPerDest );
+
+            CMutableTransaction rawTx;
+            for(int i = 0; i < unspentCount; ++i)
+            {
+                int currIdx = startingUnspentIdx + i;
+                auto& unspent = unspentList[currIdx];
+                uint256 txid;
+                txid.SetHex(unspent.txid);
+                CTxIn in(COutPoint(txid, unspent.vout), CScript(), std::numeric_limits<uint32_t>::max());
+                rawTx.vin.push_back(in);
+            }
+
             Amount nAmount(satoshisPerDest);
 
             std::set<CTxDestination> destinations;
@@ -1345,16 +1364,17 @@ static UniValue fillmempool(const Config &config,
             rawHxTxs.push_back(rawTx);
 
             // startingOutAddress = endOutput;
-            ++counter;
-            int percent = counter * 100 / unspentList.size();
+            startingUnspentIdx += unspentCount;
+            int percent = startingUnspentIdx * 100 / unspentList.size();
             if(percent > lastPercent)
             {
                 lastPercent = percent;
-                LogPrintf( "Create raw transaction progress %d%% (%d/%d)\n", percent, counter, unspentList.size() );
+                LogPrintf( "Create raw transaction progress %d%% (%d/%d)\n", percent, startingUnspentIdx, unspentList.size() );
             }
         }
+        
     }
-    LogPrintf( "Create raw transaction done\n");
+    LogPrintf( "Create raw transaction done. Total transactions %d\n", rawHxTxs.size());
 
 
     //  ======================= Sign transactions =================================//
