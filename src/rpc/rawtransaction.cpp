@@ -1369,7 +1369,7 @@ static UniValue fillmempool(const Config &config,
             if(percent > lastPercent)
             {
                 lastPercent = percent;
-                LogPrintf( "Create raw transaction progress %d%% (%d/%d)\n", percent, startingUnspentIdx, unspentList.size() );
+                LogPrintf( "Create raw transaction progress %d%% (processed txin %d/%d)\n", percent, startingUnspentIdx, unspentList.size() );
             }
         }
         
@@ -1379,63 +1379,74 @@ static UniValue fillmempool(const Config &config,
 
     //  ======================= Sign transactions =================================//
     LogPrintf( "Signing transactions\n");
-
-    const CKeyStore& keystore = *pwallet;
-    SigHashType sigHashType = SigHashType().withForkId();
-    for(CMutableTransaction& tx : rawHxTxs)
     {
-        CCoinsView viewDummy;
-        CCoinsViewCache view(&viewDummy);
+        int lastPercent = -1;
+        int counter = 0;
+        const CKeyStore& keystore = *pwallet;
+        SigHashType sigHashType = SigHashType().withForkId();
+        for(CMutableTransaction& tx : rawHxTxs)
         {
-            LOCK(mempool.cs);
-            CCoinsViewCache &viewChain = *pcoinsTip;
-            CCoinsViewMemPool viewMempool(&viewChain, mempool);
-            // Temporarily switch cache backend to db+mempool view.
-            view.SetBackend(viewMempool);
+            CCoinsView viewDummy;
+            CCoinsViewCache view(&viewDummy);
+            {
+                LOCK(mempool.cs);
+                CCoinsViewCache &viewChain = *pcoinsTip;
+                CCoinsViewMemPool viewMempool(&viewChain, mempool);
+                // Temporarily switch cache backend to db+mempool view.
+                view.SetBackend(viewMempool);
 
-            for (const CTxIn &txin : tx.vin) {
-                // Load entries from viewChain into view; can fail.
-                view.AccessCoin(txin.prevout);
+                for (const CTxIn &txin : tx.vin) {
+                    // Load entries from viewChain into view; can fail.
+                    view.AccessCoin(txin.prevout);
+                }
+
+                // Switch back to avoid locking mempool for too long.
+                view.SetBackend(viewDummy);
             }
 
-            // Switch back to avoid locking mempool for too long.
-            view.SetBackend(viewDummy);
-        }
+            const CTransaction txConst(tx);
 
-        const CTransaction txConst(tx);
+            UniValue vErrors(UniValue::VARR);
+            for (size_t i = 0; i < tx.vin.size(); i++) 
+            {
+                CTxIn &txin = tx.vin[i];
+                const Coin &coin = view.AccessCoin(txin.prevout);
+                if (coin.IsSpent()) {
+                    TxInErrorToJSON(txin, vErrors, "Input not found or already spent");
+                    continue;
+                }
 
-        UniValue vErrors(UniValue::VARR);
-        for (size_t i = 0; i < tx.vin.size(); i++) 
-        {
-            CTxIn &txin = tx.vin[i];
-            const Coin &coin = view.AccessCoin(txin.prevout);
-            if (coin.IsSpent()) {
-                TxInErrorToJSON(txin, vErrors, "Input not found or already spent");
-                continue;
+                const CScript &prevPubKey = coin.GetTxOut().scriptPubKey;
+                const Amount amount = coin.GetTxOut().nValue;
+
+                SignatureData sigdata;
+                // Only sign SIGHASH_SINGLE if there's a corresponding output:
+                if ((sigHashType.getBaseType() != BaseSigHashType::SINGLE) ||
+                    (i < tx.vout.size())) {
+                    ProduceSignature(MutableTransactionSignatureCreator(
+                                            &keystore, &tx, i, amount, sigHashType),
+                                        prevPubKey, sigdata);
+                }
+
+                UpdateTransaction(tx, i, sigdata);
+
+                ScriptError serror = SCRIPT_ERR_OK;
+                if (!VerifyScript(
+                        txin.scriptSig, prevPubKey, STANDARD_SCRIPT_VERIFY_FLAGS,
+                        TransactionSignatureChecker(&txConst, i, amount), &serror)) {
+                    TxInErrorToJSON(txin, vErrors, ScriptErrorString(serror));
+                }
             }
-
-            const CScript &prevPubKey = coin.GetTxOut().scriptPubKey;
-            const Amount amount = coin.GetTxOut().nValue;
-
-            SignatureData sigdata;
-            // Only sign SIGHASH_SINGLE if there's a corresponding output:
-            if ((sigHashType.getBaseType() != BaseSigHashType::SINGLE) ||
-                (i < tx.vout.size())) {
-                ProduceSignature(MutableTransactionSignatureCreator(
-                                        &keystore, &tx, i, amount, sigHashType),
-                                    prevPubKey, sigdata);
-            }
-
-            UpdateTransaction(tx, i, sigdata);
-
-            ScriptError serror = SCRIPT_ERR_OK;
-            if (!VerifyScript(
-                    txin.scriptSig, prevPubKey, STANDARD_SCRIPT_VERIFY_FLAGS,
-                    TransactionSignatureChecker(&txConst, i, amount), &serror)) {
-                TxInErrorToJSON(txin, vErrors, ScriptErrorString(serror));
+            ++counter;
+            int percent = counter * 100 / rawHxTxs.size();
+            if(percent > lastPercent)
+            {
+                lastPercent = percent;
+                LogPrintf( "Signing transactions progress %d%% (processed txin %d/%d)\n", percent, counter, rawHxTxs.size() );
             }
         }
     }
+
     LogPrintf( "Signing transactions done\n");
 
     UniValue result(UniValue::VARR);
