@@ -1174,7 +1174,7 @@ static UniValue sendrawtransaction(const Config &config,
 }
 
 
-#if 1//#ifdef ENABLE_WALLET
+#ifdef ENABLE_WALLET
 
 //  currently placeholder to generate big sig ops scripts. currently it's regular script same as createrawtransaction
 class CBigSigOpsScriptVisitor : public boost::static_visitor<bool> {
@@ -1211,6 +1211,41 @@ CScript GetBigSigOpsScriptForDestination(const CTxDestination &dest) {
     return script;
 }
 
+class ProgressLogHelper
+{
+public:
+    ProgressLogHelper(uint32_t t, std::string l = "operations")
+        : total(t)
+        , percent(0)
+        , success(false)
+        , label(l)
+    {
+        LogPrintf( "%s start\n", label.c_str());
+    }
+
+    ~ProgressLogHelper()
+    {
+        if(success)
+            LogPrintf( "%s done\n", label.c_str());
+        else
+            LogPrintf( "%s stopped\n", label.c_str());
+    }
+
+    void PrintProgress(uint32_t count)
+    {
+        int newPercent = count * 100 / total;
+        if(newPercent > percent)
+        {
+            percent = newPercent;
+            LogPrintf( "%s progress %d%% (%d/%d)\n", label.c_str(), percent, count, total );
+        }
+    }
+
+    uint32_t total;
+    int percent;
+    bool success;
+    std::string label;
+};
 
 static UniValue fillmempool(const Config &config,
                                          const JSONRPCRequest &request) {
@@ -1219,7 +1254,7 @@ static UniValue fillmempool(const Config &config,
         return NullUniValue;
     }
 
-    if (request.fHelp || request.params.size() != 0) {
+    if (request.fHelp || request.params.size() > 1) {
         throw std::runtime_error(
             "resendwallettransactions\n"
             "Immediately re-broadcast unconfirmed wallet transactions to all "
@@ -1230,6 +1265,19 @@ static UniValue fillmempool(const Config &config,
             "Returns an RPC error if -walletbroadcast is set to false.\n"
             "Returns array of transaction ids that were re-broadcast.\n");
     }
+
+    int OUTPUT_PER_INPUT = 100;
+    if (request.params.size() > 0 && request.params[0].isNum()) {
+        OUTPUT_PER_INPUT = request.params[0].get_int();
+        if(OUTPUT_PER_INPUT < 1)
+            OUTPUT_PER_INPUT = 1;
+    }
+    else
+    {
+        LogPrintf("Arguments %s\n", request.params[0].get_str().c_str());
+        return UniValue();
+    }
+    
     // Parse the account first so we don't generate a key if there's an error
     std::string strAccount;
     if (!pwallet->IsLocked()) {
@@ -1265,14 +1313,14 @@ static UniValue fillmempool(const Config &config,
             unspentList.push_back(Unspent{out.tx->GetId().GetHex(), static_cast<uint32_t>(out.i), amount.GetSatoshis()});
         }
     }
+    LogPrintf("Found %d unspent transactions\n", unspentList.size());
     //  =========== get new address =====================//
 
     // Generate a new key that is added to wallet
-    const int OUTPUT_PER_INPUT = 100;
     std::vector<std::string> addresses;
     {
         int totalOut = OUTPUT_PER_INPUT;//unspentList.size() * OUTPUT_PER_INPUT; //  send to 10 address per input
-        int lastPercent = -1;
+        ProgressLogHelper a(totalOut, "get new address");
         for(int i = 0; i < totalOut; ++i)
         {
             CPubKey newKey;
@@ -1285,23 +1333,16 @@ static UniValue fillmempool(const Config &config,
 
             pwallet->SetAddressBook(keyID, strAccount, "receive");
             addresses.push_back(EncodeDestination(keyID));
-            int percent = i * 100 / totalOut;
-            if(percent > lastPercent)
-            {
-                lastPercent = percent;
-                LogPrintf( "get new address progress %d%% (%d/%d)\n", percent, i, totalOut );
-            }
+            a.PrintProgress(i);
         }
-        LogPrintf("Found %d unspent transactions and creating %d output address\n", unspentList.size(), totalOut);
     }
 
-    LogPrintf( "Create raw transaction step\n" );
     //  ==================== createrawtransaction ===========================//
     std::vector<CMutableTransaction> rawHxTxs;
     {
         // int startingOutAddress = 0;
         rawHxTxs.reserve(unspentList.size());
-        int lastPercent = -1;
+        ProgressLogHelper a(unspentList.size(), "Create raw transaction");
 
         unsigned int startingUnspentIdx = 0;
         Amount feePerK = minRelayTxFee.GetFeePerK();
@@ -1363,27 +1404,20 @@ static UniValue fillmempool(const Config &config,
 
             rawHxTxs.push_back(rawTx);
 
-            // startingOutAddress = endOutput;
             startingUnspentIdx += unspentCount;
-            int percent = startingUnspentIdx * 100 / unspentList.size();
-            if(percent > lastPercent)
-            {
-                lastPercent = percent;
-                LogPrintf( "Create raw transaction progress %d%% (processed txin %d/%d)\n", percent, startingUnspentIdx, unspentList.size() );
-            }
+            a.PrintProgress(startingUnspentIdx);
         }
-        
     }
-    LogPrintf( "Create raw transaction done. Total transactions %d\n", rawHxTxs.size());
 
 
     //  ======================= Sign transactions =================================//
     LogPrintf( "Signing transactions\n");
     {
-        int lastPercent = -1;
         int counter = 0;
         const CKeyStore& keystore = *pwallet;
         SigHashType sigHashType = SigHashType().withForkId();
+        ProgressLogHelper a(rawHxTxs.size(), "Signing transactions");
+
         for(CMutableTransaction& tx : rawHxTxs)
         {
             CCoinsView viewDummy;
@@ -1438,57 +1472,52 @@ static UniValue fillmempool(const Config &config,
                 }
             }
             ++counter;
-            int percent = counter * 100 / rawHxTxs.size();
-            if(percent > lastPercent)
-            {
-                lastPercent = percent;
-                LogPrintf( "Signing transactions progress %d%% (processed txin %d/%d)\n", percent, counter, rawHxTxs.size() );
-            }
+            a.PrintProgress(counter);
         }
     }
-
-    LogPrintf( "Signing transactions done\n");
 
     UniValue result(UniValue::VARR);
     Amount nMaxRawTxFee = maxTxFee;
     //  ================================ send transaction ==================================//
-    LogPrintf( "submitting transactions\n");
-    for(CMutableTransaction& mtx : rawHxTxs)
     {
-        CTransactionRef tx(MakeTransactionRef(std::move(mtx)));
-        const uint256 &txid = tx->GetId();
 
-        CValidationState state;
-        bool fLimitFree = false;
-        bool fMissingInputs = false;
-        if (!AcceptToMemoryPool(config, mempool, state, std::move(tx),
-                                fLimitFree, &fMissingInputs, false,
-                                nMaxRawTxFee)) {
-            if (state.IsInvalid()) {
-                throw JSONRPCError(RPC_TRANSACTION_REJECTED,
-                                   strprintf("%i: %s", state.GetRejectCode(),
-                                             state.GetRejectReason()));
-            } else {
-                if (fMissingInputs) {
-                    throw JSONRPCError(RPC_TRANSACTION_ERROR, "Missing inputs");
+        ProgressLogHelper a(rawHxTxs.size(), "Submitting transactions");
+
+        int count = 0;
+        for(CMutableTransaction& mtx : rawHxTxs)
+        {
+            CTransactionRef tx(MakeTransactionRef(std::move(mtx)));
+            const uint256 &txid = tx->GetId();
+
+            CValidationState state;
+            bool fLimitFree = false;
+            bool fMissingInputs = false;
+            if (!AcceptToMemoryPool(config, mempool, state, std::move(tx),
+                                    fLimitFree, &fMissingInputs, false,
+                                    nMaxRawTxFee)) {
+                if (state.IsInvalid()) {
+                    throw JSONRPCError(RPC_TRANSACTION_REJECTED,
+                                    strprintf("%i: %s", state.GetRejectCode(),
+                                                state.GetRejectReason()));
+                } else {
+                    if (fMissingInputs) {
+                        throw JSONRPCError(RPC_TRANSACTION_ERROR, "Missing inputs");
+                    }
+
+                    throw JSONRPCError(RPC_TRANSACTION_ERROR,
+                                    state.GetRejectReason());
                 }
-
-                throw JSONRPCError(RPC_TRANSACTION_ERROR,
-                                   state.GetRejectReason());
             }
-        }
-        if (!g_connman) {
-            throw JSONRPCError(
-                RPC_CLIENT_P2P_DISABLED,
-                "Error: Peer-to-peer functionality missing or disabled");
-        }
 
-        result.push_back(txid.GetHex());
-        CInv inv(MSG_TX, txid);
-        g_connman->ForEachNode([&inv](CNode *pnode) { pnode->PushInventory(inv); });
+            result.push_back(txid.GetHex());
+            CInv inv(MSG_TX, txid);
+            g_connman->ForEachNode([&inv](CNode *pnode) { pnode->PushInventory(inv); });
+            ++count;
+            a.PrintProgress(count);
 
+        }
+        a.success = true;
     }
-    LogPrintf( "submitting transactions done\n");
 
     return result;
 }
@@ -1506,8 +1535,9 @@ static const CRPCCommand commands[] = {
     { "rawtransactions",    "decodescript",           decodescript,           true,  {"hexstring"} },
     { "rawtransactions",    "sendrawtransaction",     sendrawtransaction,     false, {"hexstring","allowhighfees"} },
     { "rawtransactions",    "signrawtransaction",     signrawtransaction,     false, {"hexstring","prevtxs","privkeys","sighashtype"} }, /* uses wallet if enabled */
-    { "rawtransactions",    "fillmempool",            fillmempool,            false, {} }, 
-
+#ifdef ENABLE_WALLET
+    { "rawtransactions",    "fillmempool",            fillmempool,            false, {"outputcount"} }, 
+#endif
     { "blockchain",         "gettxoutproof",          gettxoutproof,          true,  {"txids", "blockhash"} },
     { "blockchain",         "verifytxoutproof",       verifytxoutproof,       true,  {"proof"} },
 };
