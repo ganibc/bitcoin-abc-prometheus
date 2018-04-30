@@ -1474,6 +1474,7 @@ static UniValue fillmempool(const Config &config,
             ++counter;
             a.PrintProgress(counter);
         }
+        a.success = true;
     }
 
     UniValue result(UniValue::VARR);

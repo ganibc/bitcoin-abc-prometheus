@@ -31,6 +31,8 @@
 #include <cstdint>
 #include <memory>
 
+#include <fstream>
+
 /**
  * Return average network hashes per second based on the last 'lookup' blocks,
  * or from the last difficulty change if 'lookup' is nonpositive. If 'height' is
@@ -370,22 +372,11 @@ static UniValue getblocktemplatelight(const Config &config,
 {
     if (request.fHelp || request.params.size() > 1) {
         throw std::runtime_error(
-            "getblocktemplate ( TemplateRequest )\n"
+            "getblocktemplatelight ( TemplateRequest )\n"
             "\nIf the request parameters include a 'mode' key, that is used to "
             "explicitly select between the default 'template' request or a "
             "'proposal'.\n"
-            "It returns data needed to construct a block to work on.\n"
-            "For full specification, see BIPs 22, 23, 9, and 145:\n"
-            "    "
-            "https://github.com/bitcoin/bips/blob/master/bip-0022.mediawiki\n"
-            "    "
-            "https://github.com/bitcoin/bips/blob/master/bip-0023.mediawiki\n"
-            "    "
-            "https://github.com/bitcoin/bips/blob/master/"
-            "bip-0009.mediawiki#getblocktemplate_changes\n"
-            "    "
-            "https://github.com/bitcoin/bips/blob/master/bip-0145.mediawiki\n"
-
+            "Based on getblocktemplate but save transactions and only send merkle branch.\n"
             "\nArguments:\n"
             "1. template_request         (json object, optional) A json object "
             "in the following spec\n"
@@ -493,8 +484,8 @@ static UniValue getblocktemplatelight(const Config &config,
             "}\n"
 
             "\nExamples:\n" +
-            HelpExampleCli("getblocktemplate", "") +
-            HelpExampleRpc("getblocktemplate", ""));
+            HelpExampleCli("getblocktemplatelight", "") +
+            HelpExampleRpc("getblocktemplatelight", ""));
     }
 
     LOCK(cs_main);
@@ -727,6 +718,14 @@ static UniValue getblocktemplatelight(const Config &config,
         merklebranch.push_back(h.GetHex());
     }
 
+    std::string jobIdHashSource = pblock->hashPrevBlock.GetHex();
+    if(!merkleSteps.empty())
+    {
+        jobIdHashSource += merkleSteps[0].GetHex();
+    }
+
+    uint160 jobId = Hash160(std::vector<uint8_t>({jobIdHashSource.begin(), jobIdHashSource.end()}));
+
     UniValue aux(UniValue::VOBJ);
     aux.push_back(
         Pair("flags", HexStr(COINBASE_FLAGS.begin(), COINBASE_FLAGS.end())));
@@ -739,6 +738,7 @@ static UniValue getblocktemplatelight(const Config &config,
     aMutable.push_back("prevblock");
 
     UniValue result(UniValue::VOBJ);
+    result.push_back(Pair("job_id", jobId.GetHex()));
     result.push_back(Pair("capabilities", aCaps));
 
     UniValue aRules(UniValue::VARR);
@@ -833,6 +833,36 @@ static UniValue getblocktemplatelight(const Config &config,
     result.push_back(Pair("curtime", pblock->GetBlockTime()));
     result.push_back(Pair("bits", strprintf("%08x", pblock->nBits)));
     result.push_back(Pair("height", (int64_t)(pindexPrev->nHeight + 1)));
+
+    std::string filename = pblock->hashPrevBlock.GetHex();
+    if(!merkleSteps.empty())
+    {
+        filename += "_";
+        filename += merkleSteps[0].GetHex();
+        uint160 filenameHash = Hash160(std::vector<uint8_t>({filename.begin(), filename.end()}));
+        filename = filenameHash.GetHex();
+    }
+
+    {
+        CDataStream datastream(SER_DISK, PROTOCOL_VERSION);
+        datastream << (uint32_t)transactions.size();
+        for (const auto &it : pblock->vtx) {
+            const CTransaction &tx = *it;
+
+            if (tx.IsCoinBase()) {
+                continue;
+            }
+
+            datastream << tx;
+        }
+
+        std::string outputFile("/home/gani/work/temp/");
+        outputFile += jobId.GetHex();
+        std::ofstream ofile(outputFile.c_str());
+        ofile << "GBT";
+        ofile.write(datastream.data(), datastream.size());//transactions.write(4);
+        ofile << "GBT";        
+    }
 
     return result;
 }
@@ -1388,6 +1418,106 @@ static UniValue submitblock(const Config &config,
     return BIP22ValidationResult(config, sc.state);
 }
 
+static UniValue submitblocklight(const Config &config,
+                            const JSONRPCRequest &request) {
+    if (request.fHelp || request.params.size() < 2 ||
+        request.params.size() > 3) {
+        throw std::runtime_error(
+            "submitblocklight \"hexdata\" ( \"jsonparametersobject\" )\n"
+            "\nAttempts to submit new block to network.\n"
+            "The 'jsonparametersobject' parameter is currently ignored.\n"
+            "See https://en.bitcoin.it/wiki/BIP_0022 for full specification.\n"
+
+            "\nArguments\n"
+            "1. \"hexdata\"        (string, required) the hex-encoded block "
+            "data to submit\n"
+            "2. \"workid\"        (string, required) the id of work from "
+            "gbt light\n"
+            "\nResult:\n"
+            "\nExamples:\n" +
+            HelpExampleCli("submitblocklight", "\"mydata\"") +
+            HelpExampleRpc("submitblocklight", "\"mydata\""));
+    }
+
+    std::shared_ptr<CBlock> blockptr = std::make_shared<CBlock>();
+    CBlock &block = *blockptr;
+    if (!DecodeHexBlk(block, request.params[0].get_str())) {
+        throw JSONRPCError(RPC_DESERIALIZATION_ERROR, "Block decode failed");
+    }
+
+    if (block.vtx.size() != 1 || !block.vtx[0]->IsCoinBase()) {
+        throw JSONRPCError(RPC_DESERIALIZATION_ERROR,
+                           "Block does not start with a coinbase");
+    }
+    
+    std::string workid = request.params[1].get_str();
+    std::string filename = "/home/gani/work/temp/";
+    filename += workid;
+    std::vector<char> dataBuff;
+    {
+        std::ifstream file(filename.c_str());
+        if(!file.is_open())
+        {
+            return "workid not available";
+        }
+        file.seekg(0, file.end);
+        int64_t fileSize = (int64_t)file.tellg();
+        auto dataSize = fileSize - 6;
+        if(dataSize <= 0)
+        {
+            return "workid not available";
+        }
+        file.seekg(3, file.beg);
+        dataBuff.resize(dataSize);
+        file.read(dataBuff.data(), dataSize);
+    }
+    CDataStream c(dataBuff, SER_DISK, PROTOCOL_VERSION);
+    uint32_t txCount = 0;
+    c >> txCount;
+    block.vtx.resize(txCount + 1);
+    for(uint32_t i = 0; i < txCount; ++i)
+    {
+        c >> block.vtx[i + 1];
+    }
+
+
+    uint256 hash = block.GetHash();
+    bool fBlockPresent = false;
+    {
+        LOCK(cs_main);
+        BlockMap::iterator mi = mapBlockIndex.find(hash);
+        if (mi != mapBlockIndex.end()) {
+            CBlockIndex *pindex = mi->second;
+            if (pindex->IsValid(BLOCK_VALID_SCRIPTS)) {
+                return "duplicate";
+            }
+            if (pindex->nStatus & BLOCK_FAILED_MASK) {
+                return "duplicate-invalid";
+            }
+            // Otherwise, we might only have the header - process the block
+            // before returning
+            fBlockPresent = true;
+        }
+    }
+
+    submitblock_StateCatcher sc(block.GetHash());
+    RegisterValidationInterface(&sc);
+    bool fAccepted = ProcessNewBlock(config, blockptr, true, nullptr);
+    UnregisterValidationInterface(&sc);
+    if (fBlockPresent) {
+        if (fAccepted && !sc.found) {
+            return "duplicate-inconclusive";
+        }
+        return "duplicate";
+    }
+
+    if (!sc.found) {
+        return "inconclusive";
+    }
+
+    return BIP22ValidationResult(config, sc.state);
+}
+
 static UniValue estimatefee(const Config &config,
                             const JSONRPCRequest &request) {
     if (request.fHelp || request.params.size() != 1) {
@@ -1554,6 +1684,7 @@ static const CRPCCommand commands[] = {
     {"mining",     "getblocktemplate",      getblocktemplate,      true, {"template_request"}},
     {"mining",     "getblocktemplatelight", getblocktemplatelight, true, {"template_request"}},
     {"mining",     "submitblock",           submitblock,           true, {"hexdata", "parameters"}},
+    {"mining",     "submitblocklight",      submitblocklight,      true, {"hexdata", "workid", "parameters"}},
 
     {"generating", "generatetoaddress",     generatetoaddress,     true, {"nblocks", "address", "maxtries"}},
 
