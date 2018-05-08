@@ -891,6 +891,10 @@ std::string HelpMessage(HelpMessageMode mode) {
         "-prometheusport=<port>",
         strprintf(_("Prometheus http server <port> (default: %u)"), 8011));
     strUsage += HelpMessageOpt(
+        "-gbtstoredir=<path>",
+        strprintf(_("path to store getblocktemplatelight")));
+
+    strUsage += HelpMessageOpt(
         "-rpcallowip=<ip>",
         _("Allow JSON-RPC connections from specified source. Valid for <ip> "
           "are a single IP (e.g. 1.2.3.4), a network/netmask (e.g. "
