@@ -12,6 +12,7 @@
 #include "script/script_error.h"
 #include "script/sighashtype.h"
 #include "script/sign.h"
+#include "test/jsonutil.h"
 #include "test/scriptflags.h"
 #include "test/sigutil.h"
 #include "test/test_bitcoin.h"
@@ -35,16 +36,6 @@
 // #define UPDATE_JSON_TESTS
 
 static const unsigned int flags = SCRIPT_VERIFY_P2SH | SCRIPT_VERIFY_STRICTENC;
-
-UniValue read_json(const std::string &jsondata) {
-    UniValue v;
-
-    if (!v.read(jsondata) || !v.isArray()) {
-        BOOST_ERROR("Parse error.");
-        return UniValue(UniValue::VARR);
-    }
-    return v.get_array();
-}
 
 struct ScriptErrorDesc {
     ScriptError_t err;
@@ -1147,14 +1138,22 @@ BOOST_AUTO_TEST_CASE(script_json_test) {
         }
 
         std::string scriptSigString = test[pos++].get_str();
-        CScript scriptSig = ParseScript(scriptSigString);
         std::string scriptPubKeyString = test[pos++].get_str();
-        CScript scriptPubKey = ParseScript(scriptPubKeyString);
-        unsigned int scriptflags = ParseScriptFlags(test[pos++].get_str());
-        int scriptError = ParseScriptError(test[pos++].get_str());
+        try {
+            CScript scriptSig = ParseScript(scriptSigString);
+            CScript scriptPubKey = ParseScript(scriptPubKeyString);
+            unsigned int scriptflags = ParseScriptFlags(test[pos++].get_str());
+            int scriptError = ParseScriptError(test[pos++].get_str());
 
-        DoTest(scriptPubKey, scriptSig, scriptflags, strTest, scriptError,
-               nValue);
+            DoTest(scriptPubKey, scriptSig, scriptflags, strTest, scriptError,
+                   nValue);
+        } catch (std::runtime_error &e) {
+            BOOST_TEST_MESSAGE("Script test failed.  scriptSig:  "
+                               << scriptSigString
+                               << " scriptPubKey: " << scriptPubKeyString);
+            BOOST_TEST_MESSAGE("Exception: " << e.what());
+            throw;
+        }
     }
 }
 

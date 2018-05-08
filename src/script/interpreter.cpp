@@ -203,17 +203,6 @@ static void CleanupScriptCode(CScript &scriptCode,
     }
 }
 
-static bool IsDefinedHashtypeSignature(const valtype &vchSig) {
-    if (vchSig.size() == 0) {
-        return false;
-    }
-    if (!GetHashType(vchSig).hasSupportedBaseType()) {
-        return false;
-    }
-
-    return true;
-}
-
 bool CheckSignatureEncoding(const std::vector<uint8_t> &vchSig, uint32_t flags,
                             ScriptError *serror) {
     // Empty signature. Not strictly DER encoded, but allowed to provide a
@@ -232,7 +221,7 @@ bool CheckSignatureEncoding(const std::vector<uint8_t> &vchSig, uint32_t flags,
         return false;
     }
     if ((flags & SCRIPT_VERIFY_STRICTENC) != 0) {
-        if (!IsDefinedHashtypeSignature(vchSig)) {
+        if (!GetHashType(vchSig).isDefined()) {
             return set_error(serror, SCRIPT_ERR_SIG_HASHTYPE);
         }
         bool usesForkId = GetHashType(vchSig).hasForkId();
@@ -1109,6 +1098,8 @@ bool EvalScript(std::vector<valtype> &stack, const CScript &script,
                         // Subset of script starting at the most recent
                         // codeseparator
                         CScript scriptCode(pbegincodehash, pend);
+
+                        // Remove signature for pre-fork scripts
                         CleanupScriptCode(scriptCode, vchSig, flags);
 
                         bool fSuccess = checker.CheckSig(vchSig, vchPubKey,
@@ -1181,8 +1172,7 @@ bool EvalScript(std::vector<valtype> &stack, const CScript &script,
                         // codeseparator
                         CScript scriptCode(pbegincodehash, pend);
 
-                        // Drop the signature in pre-segwit scripts but not
-                        // segwit scripts
+                        // Remove signature for pre-fork scripts
                         for (int k = 0; k < nSigsCount; k++) {
                             valtype &vchSig = stacktop(-isig - k);
                             CleanupScriptCode(scriptCode, vchSig, flags);

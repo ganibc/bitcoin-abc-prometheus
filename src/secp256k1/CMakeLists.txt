@@ -1,6 +1,6 @@
 # Copyright (c) 2017 The Bitcoin developers
 
-cmake_minimum_required(VERSION 3.1)
+cmake_minimum_required(VERSION 3.5)
 project(secp256k1)
 
 # libsecp256k1 use a different set of flags.
@@ -11,6 +11,14 @@ add_compiler_flag(
 	-Wno-nonnull
 	-Wno-nonnull-compare
 )
+
+add_c_compiler_flag(
+	-std=c89
+	-Wno-long-long
+)
+
+# Default visibility is hidden on all targets.
+set(CMAKE_C_VISIBILITY_PRESET hidden)
 
 # TODO: change this to include when possible
 include_directories(
@@ -64,36 +72,72 @@ else()
 	set(USE_FIELD_10X26 1)
 endif()
 
+# Executable internal to secp256k1 need to have the HAVE_CONFIG_H define set.
+# For convenience, we wrap this into a function.
+function(link_secp256k1_internal NAME)
+	target_link_libraries(${NAME} secp256k1)
+	target_compile_definitions(${NAME} PRIVATE HAVE_CONFIG_H SECP256K1_BUILD)
+endfunction(link_secp256k1_internal)
+
+# Phony target to build benchmarks
+add_custom_target(bench-secp256k1)
+
+function(add_secp256k1_bench NAME)
+	add_executable(${NAME} EXCLUDE_FROM_ALL ${ARGN})
+	link_secp256k1_internal(${NAME})
+	add_dependencies(bench-secp256k1 ${NAME})
+endfunction(add_secp256k1_bench)
+
 # Recovery module
 option(SECP256K1_ENABLE_MODULE_RECOVERY "Build libsecp256k1's recovery module" ON)
 if(SECP256K1_ENABLE_MODULE_RECOVERY)
 	set(ENABLE_MODULE_RECOVERY 1)
-
-	#TODO: recovery benchmark
+	add_secp256k1_bench(bench_recover src/bench_recover.c)
 endif()
 
 # ECDH module
 option(SECP256K1_ENABLE_MODULE_ECDH "Build libsecp256k1's ECDH module" OFF)
 if(SECP256K1_ENABLE_MODULE_ECDH)
 	set(ENABLE_MODULE_ECDH 1)
+	add_secp256k1_bench(bench_ecdh src/bench_ecdh.c)
+endif()
 
-	#TODO: ECDH benchmark
+# MultiSet module
+option(SECP256K1_ENABLE_MODULE_MULTISET "Build libsecp256k1's MULTISET module" ON)
+if(SECP256K1_ENABLE_MODULE_MULTISET)
+    set(ENABLE_MODULE_MULTISET 1)
+	add_secp256k1_bench(bench_multiset src/bench_multiset.c)
+endif()
+
+# Static precomputation for eliptic curve mutliplication
+option(SECP256K1_ECMULT_STATIC_PRECOMPUTATION "Precompute libsecp256k1's eliptic curve mutliplication tables" ON)
+if(SECP256K1_ECMULT_STATIC_PRECOMPUTATION)
+	set(USE_ECMULT_STATIC_PRECOMPUTATION 1)
+
+	include(NativeExecutable)
+	add_native_executable(gen_context src/gen_context.c)
+
+	add_custom_command(
+		OUTPUT ecmult_static_context.h
+		COMMAND gen_context
+	)
+
+	target_sources(secp256k1 PRIVATE ecmult_static_context.h)
 endif()
 
 # Generate the config
 configure_file(src/libsecp256k1-config.h.cmake.in src/libsecp256k1-config.h ESCAPE_QUOTES)
-target_compile_definitions(secp256k1 PRIVATE HAVE_CONFIG_H)
+target_compile_definitions(secp256k1 PRIVATE HAVE_CONFIG_H SECP256K1_BUILD)
 
 # Tests
 option(SECP256K1_BUILD_TEST "Build secp256k1's unit tests" ON)
 if(SECP256K1_BUILD_TEST)
-	enable_testing()
+	include(TestSuite)
+	create_test_suite(secp256k1)
 
 	function(create_secp256k1_test NAME FILES)
-		add_executable(${NAME} ${FILES})
-		target_link_libraries(${NAME} secp256k1)
-		add_test(NAME ${NAME} COMMAND ${NAME})
-		target_compile_definitions(${NAME} PRIVATE HAVE_CONFIG_H)
+		add_test_to_suite(secp256k1 ${NAME} EXCLUDE_FROM_ALL ${FILES})
+		link_secp256k1_internal(${NAME})
 	endfunction()
 
 	create_secp256k1_test(secp256k1_tests src/tests.c)
@@ -105,6 +149,7 @@ if(SECP256K1_BUILD_TEST)
 	target_compile_definitions(exhaustive_tests PRIVATE VERIFY)
 endif(SECP256K1_BUILD_TEST)
 
-# TODO: emult static precomputation
-# TODO: ecdh module
-# TODO: RECOVERY module
+# Benchmarks
+add_secp256k1_bench(bench_verify src/bench_verify.c)
+add_secp256k1_bench(bench_sign src/bench_sign.c)
+add_secp256k1_bench(bench_internal src/bench_internal.c)

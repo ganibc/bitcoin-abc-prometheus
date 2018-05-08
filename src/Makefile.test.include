@@ -40,20 +40,24 @@ BITCOIN_TESTS =\
   test/bswap_tests.cpp \
   test/cashaddr_tests.cpp \
   test/cashaddrenc_tests.cpp \
+  test/checkpoints_tests.cpp \
   test/coins_tests.cpp \
   test/compress_tests.cpp \
   test/config_tests.cpp \
+  test/core_io_tests.cpp \
   test/crypto_tests.cpp \
   test/cuckoocache_tests.cpp \
+  test/dbwrapper_tests.cpp \
   test/DoS_tests.cpp \
   test/dstencode_tests.cpp \
   test/excessiveblock_tests.cpp \
   test/getarg_tests.cpp \
   test/hash_tests.cpp \
   test/inv_tests.cpp \
+  test/jsonutil.cpp \
+  test/jsonutil.h \
   test/key_tests.cpp \
   test/limitedmap_tests.cpp \
-  test/dbwrapper_tests.cpp \
   test/main_tests.cpp \
   test/mempool_tests.cpp \
   test/merkle_tests.cpp \

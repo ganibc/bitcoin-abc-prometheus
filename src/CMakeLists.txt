@@ -1,6 +1,13 @@
 # Copyright (c) 2017 The Bitcoin developers
 
+cmake_minimum_required(VERSION 3.5)
+project(BitcoinABC)
+
 set(CMAKE_CXX_STANDARD 11)
+
+# Default visibility is hidden on all targets.
+set(CMAKE_C_VISIBILITY_PRESET hidden)
+set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 
 option(BUILD_BITCOIN_WALLET "Activate the wallet functionality" ON)
 option(BUILD_BITCOIN_ZMQ "Activate the ZeroMQ functionalities" ON)
@@ -58,6 +65,7 @@ add_library(util
 	compat/glibcxx_sanity.cpp
 	compat/strnlen.cpp
 	fs.cpp
+	logging.cpp
 	random.cpp
 	rpc/protocol.cpp
 	support/cleanse.cpp
@@ -98,11 +106,11 @@ else()
 endif()
 
 function(prepend var prefix)
-   set(listVar "")
-   foreach(f ${ARGN})
-      list(APPEND listVar "${prefix}${f}")
-   endforeach(f)
-   set(${var} "${listVar}" PARENT_SCOPE)
+	set(listVar "")
+	foreach(f ${ARGN})
+		list(APPEND listVar "${prefix}${f}")
+	endforeach(f)
+	set(${var} "${listVar}" PARENT_SCOPE)
 endfunction(prepend)
 
 prepend(BOOST_LIBRARIES "Boost::" ${BOOST_PACKAGES_REQUIRED})
@@ -219,6 +227,9 @@ if(NOT ${CMAKE_SYSTEM_NAME} MATCHES "Windows")
 	target_link_libraries(server ${EVENT_PTHREAD_LIBRARY})
 endif()
 
+# Test suite.
+add_subdirectory(test)
+
 # Wallet
 if(BUILD_BITCOIN_WALLET)
 	add_subdirectory(wallet)
@@ -267,9 +278,6 @@ target_link_libraries(bitcoind server)
 if(${CMAKE_SYSTEM_NAME} MATCHES "Windows")
 	target_sources(bitcoind PRIVATE bitcoind-res.rc)
 endif()
-
-# Test suite.
-add_subdirectory(test)
 
 # Bitcoin-qt
 if(BUILD_BITCOIN_QT)
