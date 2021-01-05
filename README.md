@@ -42,3 +42,4 @@ This Github repository contains only source code of releases.
 Bitcoin ABC development takes place at https://reviews.bitcoinabc.org/
 
 If you would like to contribute, please read [CONTRIBUTING](CONTRIBUTING.md)
+ 
